@@ -4,7 +4,7 @@
 
 ## 一句话总结
 
-Aurellion Labs 相关 Diamond 合约在 Arbitrum 上存在初始化/升级权限问题：攻击者可以取得 Diamond 控制权，加入自定义逻辑，并利用用户此前授予该 Diamond 的 ERC20 allowance 转走 USDC。
+Aurellion Labs 事件中的核心问题不是 USDC 本身，而是一个 Diamond/拉取合约流程被攻击者初始化并改造：攻击者通过 DiamondCut 加入自定义逻辑，利用部分地址此前授予该 Diamond 地址的 ERC20 allowance 转走 USDC。
 
 ## 信息来源
 
@@ -19,7 +19,7 @@ Aurellion Labs 相关 Diamond 合约在 Arbitrum 上存在初始化/升级权限
 - 区块：`462014667`
 - 攻击者 EOA：`0x9f49591a3bf95b49cd8d9477b4481ce9da68d5ca`
 - 攻击者临时合约：`0x4d7759e69cc973d338a1ea2fdb125c2b818f4d7e`
-- 受影响 Diamond：`0x0adc63e71b035d5c7fdb1b4593999fa1f296f1b2`
+- 被滥用 Diamond / 拉取合约：`0x0adc63e71b035d5c7fdb1b4593999fa1f296f1b2`
 - 资产：Arbitrum USDC `0xaf88d065e77c8cc2239327c5edb3a432268e5831`
 - 影响：约 `456,442.536622 USDC` 被转移
 
@@ -31,25 +31,25 @@ Aurellion Labs 相关 Diamond 合约在 Arbitrum 上存在初始化/升级权限
 | `0xa90714a15d6e5c0eb3096462de8dc4b22e01589a` | `3.000000 USDC` |
 | `0xeced2d37e5edcfc67ffb74c655416f893d20793e` | `1.281433 USDC` |
 
-这些 USDC 先进入受影响 Diamond，再被转到攻击者临时合约，最后转给攻击者 EOA。
+这些 USDC 先进入被滥用的 Diamond / 拉取合约，再被转到攻击者临时合约，最后转给攻击者 EOA。
 
 ## 漏洞根因
 
-受影响合约是 Diamond 风格代理。攻击路径的核心不是 USDC 本身的问题，而是 Diamond 的初始化和升级权限没有被正确锁定。
+本次事件的核心不是 USDC 代币漏洞，而是 Diamond 风格合约流程被攻击者控制后，变成了 ERC20 allowance 拉取器。
 
-攻击者能够让 Diamond 把自己控制的合约视为 owner，随后通过 Diamond 升级机制加入新的执行逻辑。新增逻辑运行在 Diamond 地址上下文中，因此可以使用用户之前授予 Diamond 的 ERC20 allowance，将 USDC 从授权用户地址转入 Diamond，再从 Diamond 转出。
+链上攻击交易中，攻击者先创建临时执行合约，再通过 `initialize(address)` 和 `diamondCut(...)` 路径让 Diamond 加入攻击者控制的 facet。新增逻辑在 Diamond 地址上下文中执行，因此可以调用 `USDC.transferFrom(...)`，把已授权地址上的 USDC 拉到 Diamond，再把余额清扫到攻击者控制地址。
 
-根因可以概括为：Upgradeable Diamond 的初始化/owner 权限缺失硬化，加上用户对该 Diamond 地址存在 ERC20 授权，最终形成了资产被拉走的风险。
+根因可以概括为：Diamond 初始化/升级控制没有被有效锁定，加上部分地址对该 Diamond 地址存在 ERC20 授权，最终形成资产被拉走的风险。
 
 ## 风险链路（概念）
 
-`初始化权限未锁定` -> `攻击者取得 Diamond 控制权` -> `加入自定义执行逻辑` -> `使用既有 ERC20 授权转移资产`。
+`Diamond 初始化/升级控制失效` -> `攻击者加入自定义 facet` -> `使用既有 ERC20 授权拉取资产` -> `清扫到攻击者地址`。
 
-对防守方来说，重点是检查 Diamond/Proxy 是否完成初始化、升级入口是否只允许可信角色调用，以及业务合约是否持有大量用户授权。
+对防守方来说，重点是检查 Diamond/Proxy 是否完成初始化、升级入口是否只允许可信角色调用，以及用户是否对不可信或治理薄弱的合约地址留下高额授权。
 
 ## 防御排查建议
 
-- 确认所有 Diamond、Proxy、Upgradeable 合约在部署时完成初始化，并禁止重复初始化。
+- 确认所有 Diamond、Proxy、Upgradeable 合约在部署时完成初始化，并禁止外部账户重复初始化或接管 owner。
 - 对初始化函数和升级函数增加明确访问控制，避免任何外部账户可以接管 owner 或升级逻辑。
 - 检查 DiamondCut/upgrade 类入口是否只允许多签、Timelock 或明确治理角色调用。
 - 盘点用户对业务合约、Diamond、Router 的 ERC20 allowance，尤其是已废弃或不再维护的合约地址。
